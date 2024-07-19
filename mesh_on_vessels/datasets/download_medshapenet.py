@@ -52,9 +52,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Download organs from med_shape_net")
 
     # Required argument
-    parser.add_argument('dest_dir', type=str, help='Save location of the downloaded data')
-    parser.add_argument('organ', type=str, help='The organ to download')
+    parser.add_argument('--dest_dir', type=str, help='Save location of the downloaded data')
+    parser.add_argument('--organ', type=str, help='The organ to download')
 
     args = parser.parse_args()
     search_and_download_organ(args.dest_dir, args.organ)
-    # e.g. --dest_dir=/net/cephfs/shares/menze.dqbm.uzh/chinmay/dataset/mesh_dataset/med_shapenet --organ=liver
+    # e.g. --dest_dir=/net/cephfs/shares/menze.dqbm.uzh/chinmay/dataset/mesh_dataset/med_shapenet --organ=kidney
