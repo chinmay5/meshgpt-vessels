@@ -1086,6 +1086,78 @@ class MeshAutoencoder(Module):
 
         return recon_faces, total_loss, loss_breakdown
 
+
+
+    @typecheck
+    def get_quantized_encoding(
+        self,
+        *,
+        vertices:       Float['b nv 3'],
+        faces:          Int['b nf nvf'],
+        face_edges:     Int['b e 2'] | None = None,
+        rvq_sample_codebook_temp = 1.
+    ):
+        if not exists(face_edges):
+            face_edges = derive_face_edges_from_faces(faces, pad_id = self.pad_id)
+
+        face_mask = reduce(faces != self.pad_id, 'b nf c -> b nf', 'all')
+        face_edges_mask = reduce(face_edges != self.pad_id, 'b e ij -> b e', 'all')
+
+        encoded, face_coordinates = self.encode(
+            vertices = vertices,
+            faces = faces,
+            face_edges = face_edges,
+            face_edges_mask = face_edges_mask,
+            face_mask = face_mask,
+            return_face_coordinates = True
+        )
+
+        quantized, codes, commit_loss = self.quantize(
+            face_embed = encoded,
+            faces = faces,
+            face_mask = face_mask,
+            rvq_sample_codebook_temp = rvq_sample_codebook_temp
+        )
+        return quantized, face_mask
+
+    @typecheck
+    def decode_from_quantized(
+        self,
+        quantized,
+        face_mask
+    ):
+
+        decoded = self.decode(
+            quantized,
+            face_mask=face_mask
+        )
+
+        decoded = decoded.masked_fill(~face_mask[..., None], 0.)
+        pred_face_coords = self.to_coor_logits(decoded)
+
+        pred_face_coords = pred_face_coords.argmax(dim=-1)
+
+        pred_face_coords = rearrange(pred_face_coords, '... (v c) -> ... v c', v=self.num_vertices_per_face)
+
+        # back to continuous space
+
+        continuous_coors = undiscretize(
+            pred_face_coords,
+            num_discrete=self.num_discrete_coors,
+            continuous_range=self.coor_continuous_range
+        )
+
+        # mask out with nan
+
+        continuous_coors = continuous_coors.masked_fill(~rearrange(face_mask, 'b nf -> b nf 1 1'), float('nan'))
+
+        return continuous_coors, face_mask
+
+
+
+
+
+
 @save_load(version = __version__)
 class MeshTransformer(Module, PyTorchModelHubMixin):
     @typecheck

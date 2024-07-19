@@ -9,6 +9,7 @@ import torch
 from torch.nn import Module
 from torch.utils.data import Dataset, DataLoader
 from torch.optim.lr_scheduler import _LRScheduler
+from tqdm import tqdm
 
 from pytorch_custom_utils import (
     get_adam_optimizer,
@@ -20,6 +21,9 @@ from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 
 from beartype.typing import Tuple, Type, List
+
+from environment_setup import PROJECT_ROOT_DIR
+from meshgpt_pytorch.mesh_render import combind_mesh_with_rows
 from meshgpt_pytorch.typing import typecheck, beartype_isinstance
 
 from ema_pytorch import EMA
@@ -32,6 +36,7 @@ from meshgpt_pytorch.meshgpt_pytorch import (
     MeshAutoencoder,
     MeshTransformer
 )
+import matplotlib.pyplot as plt
 
 # constants
 
@@ -88,10 +93,12 @@ class MeshAutoencoderTrainer(Module):
         accelerator_kwargs: dict = dict(),
         optimizer_kwargs: dict = dict(),
         checkpoint_every = 1000,
+        checkpoint_every_epoch: Type[int] | None = None,
         checkpoint_folder = './checkpoints',
         data_kwargs: Tuple[str, ...] = ['vertices', 'faces', 'face_edges'],
         warmup_steps = 1000,
-        use_wandb_tracking = False
+        use_wandb_tracking = False,
+        check_sample_every_n_steps=0
     ):
         super().__init__()
 
@@ -134,7 +141,7 @@ class MeshAutoencoderTrainer(Module):
         self.should_validate = exists(val_dataset)
 
         if self.should_validate:
-            assert len(val_dataset) > 0, 'your validation dataset is empty'
+            assert len(val_dataset) > 0, 'your validation datasets is empty'
 
             self.val_every = val_every
             self.val_num_batches = val_num_batches
@@ -168,6 +175,8 @@ class MeshAutoencoderTrainer(Module):
         self.checkpoint_every = checkpoint_every
         self.checkpoint_folder = Path(checkpoint_folder)
         self.checkpoint_folder.mkdir(exist_ok = True, parents = True)
+        self.checkpoint_every_epoch = checkpoint_every_epoch
+        self.check_sample_every_n_steps = check_sample_every_n_steps
 
     @property
     def ema_tokenizer(self):
@@ -318,8 +327,135 @@ class MeshAutoencoderTrainer(Module):
                 self.save(self.checkpoint_folder / f'mesh-autoencoder.ckpt.{checkpoint_num}.pt')
 
             self.wait()
+            # Let us also quantize the reconstruction in the intermediate epochs
+            if self.is_main and divisible_by(step, self.check_sample_every_n_steps):
+                self.model.eval()
+                self.evaluate_samples(self.model, self.dataloader.dataset)
+                self.model.train()
+            self.wait()
 
         self.print('training complete')
+
+    def train(self, num_epochs, stop_at_loss=None, diplay_graph=False):
+        epoch_losses, epoch_recon_losses, epoch_commit_losses = [], [], []
+        self.model.train()
+
+        for epoch in range(num_epochs):
+            total_epoch_loss, total_epoch_recon_loss, total_epoch_commit_loss = 0.0, 0.0, 0.0
+
+            progress_bar = tqdm(enumerate(self.dataloader), desc=f'Epoch {epoch + 1}/{num_epochs}',
+                                total=len(self.dataloader))
+            for batch_idx, batch in progress_bar:
+                is_last = (batch_idx + 1) % self.grad_accum_every == 0
+                maybe_no_sync = partial(self.accelerator.no_sync, self.model) if not is_last else nullcontext
+
+                if isinstance(batch, tuple):
+                    forward_kwargs = dict(zip(self.data_kwargs, batch))
+                elif isinstance(batch, dict):
+                    forward_kwargs = batch
+                maybe_del(forward_kwargs, 'texts', 'text_embeds')
+
+                with self.accelerator.autocast(), maybe_no_sync():
+                    total_loss, (recon_loss, commit_loss) = self.model(
+                        **forward_kwargs,
+                        return_loss_breakdown=True
+                    )
+                    self.accelerator.backward(total_loss / self.grad_accum_every)
+
+                current_loss = total_loss.item()
+                total_epoch_loss += current_loss
+                total_epoch_recon_loss += recon_loss.item()
+                total_epoch_commit_loss += commit_loss.sum().item()
+
+                progress_bar.set_postfix(loss=current_loss, recon_loss=round(recon_loss.item(), 3),
+                                         commit_loss=round(commit_loss.sum().item(), 4))
+
+                if is_last or (batch_idx + 1 == len(self.dataloader)):
+                    self.optimizer.step()
+                    self.optimizer.zero_grad()
+
+            avg_recon_loss = total_epoch_recon_loss / len(self.dataloader)
+            avg_commit_loss = total_epoch_commit_loss / len(self.dataloader)
+            avg_epoch_loss = total_epoch_loss / len(self.dataloader)
+
+            epoch_losses.append(avg_epoch_loss)
+            epoch_recon_losses.append(avg_recon_loss)
+            epoch_commit_losses.append(avg_commit_loss)
+
+            epochOut = f'Epoch {epoch + 1} average loss: {avg_epoch_loss} recon loss: {avg_recon_loss:.4f}: commit_loss {avg_commit_loss:.4f}'
+
+            if len(epoch_losses) >= 4 and avg_epoch_loss > 0:
+                avg_loss_improvement = sum(epoch_losses[-4:-1]) / 3 - avg_epoch_loss
+                epochOut += f'          avg loss speed: {avg_loss_improvement}'
+                if avg_loss_improvement > 0 and avg_loss_improvement < 0.2:
+                    epochs_until_0_3 = max(0, abs(avg_epoch_loss - 0.3) / avg_loss_improvement)
+                    if epochs_until_0_3 > 0:
+                        epochOut += f' epochs left: {epochs_until_0_3:.2f}'
+            # Let us also quantize the reconstruction in the intermediate epochs
+            if epoch % self.check_sample_every_n_steps == (self.check_sample_every_n_steps - 1):
+                self.evaluate_samples(self.model, self.dataloader.dataset)
+
+            self.wait()
+            self.print(epochOut)
+
+            if self.is_main and self.checkpoint_every_epoch is not None and (
+                    self.checkpoint_every_epoch == 1 or (epoch != 0 and epoch % self.checkpoint_every_epoch == 0)):
+                self.save(
+                    self.checkpoint_folder / f'mesh-autoencoder.ckpt.epoch_{epoch}_avg_loss_{avg_epoch_loss:.5f}_recon_{avg_recon_loss:.4f}_commit_{avg_commit_loss:.4f}.pt')
+
+            if stop_at_loss is not None and avg_epoch_loss < stop_at_loss:
+                self.print(f'Stopping training at epoch {epoch} with average loss {avg_epoch_loss}')
+                if self.is_main and self.checkpoint_every_epoch is not None:
+                    self.save(
+                        self.checkpoint_folder / f'mesh-autoencoder.ckpt.stop_at_loss_avg_loss_{avg_epoch_loss:.3f}.pt')
+                break
+
+        self.print('Training complete')
+        if diplay_graph:
+            plt.figure(figsize=(10, 5))
+            plt.plot(range(1, len(epoch_losses) + 1), epoch_losses, marker='o', label='Total Loss')
+            plt.plot(range(1, len(epoch_losses) + 1), epoch_recon_losses, marker='o', label='Recon Loss')
+            plt.plot(range(1, len(epoch_losses) + 1), epoch_commit_losses, marker='o', label='Commit Loss')
+            plt.title('Training Loss Over Epochs')
+            plt.xlabel('Epoch')
+            plt.ylabel('Average Loss')
+            plt.grid(True)
+            plt.show()
+        return epoch_losses[-1]
+
+
+    @staticmethod
+    @torch.inference_mode
+    def evaluate_samples(autoencoder, dataset):
+        import torch
+        import random
+        from tqdm import tqdm
+        min_mse, max_mse = float('inf'), float('-inf')
+        random_samples, random_samples_pred, all_random_samples = [], [], []
+        total_mse, sample_size = 0.0, 5
+        random.shuffle(dataset.data)
+        for item in tqdm(dataset.data[:sample_size]):
+            codes = autoencoder.tokenize(vertices=item['vertices'], faces=item['faces'], face_edges=item['face_edges'])
+
+            codes = codes.flatten().unsqueeze(0)
+            codes = codes[:, :codes.shape[-1] // autoencoder.num_quantizers * autoencoder.num_quantizers]
+
+            coords, mask = autoencoder.decode_from_codes_to_faces(codes)
+            orgs = item['vertices'][item['faces']].unsqueeze(0)
+
+            mse = torch.mean((orgs.view(-1, 3).cpu() - coords.view(-1, 3).cpu()) ** 2)
+            total_mse += mse
+
+            if mse < min_mse: min_mse, min_coords, min_orgs = mse, coords, orgs
+            if mse > max_mse: max_mse, max_coords, max_orgs = mse, coords, orgs
+
+            # We just save the first 30 samples or so.
+            if len(random_samples) <= 30:
+                random_samples.append(coords)
+                random_samples_pred.append(orgs)
+        print(f'MSE AVG: {total_mse / sample_size:.10f}, Min: {min_mse:.10f}, Max: {max_mse:.10f}')
+        combind_mesh_with_rows(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/mse_rows.obj', random_samples)
+
 
 # mesh transformer trainer
 
@@ -348,7 +484,8 @@ class MeshTransformerTrainer(Module):
         checkpoint_folder = './checkpoints',
         data_kwargs: Tuple[str, ...] = ['vertices', 'faces', 'face_edges', 'texts'],
         warmup_steps = 1000,
-        use_wandb_tracking = False
+        use_wandb_tracking = False,
+        log_every_n_iters = 100
     ):
         super().__init__()
 
@@ -394,7 +531,7 @@ class MeshTransformerTrainer(Module):
         self.should_validate = exists(val_dataset)
 
         if self.should_validate:
-            assert len(val_dataset) > 0, 'your validation dataset is empty'
+            assert len(val_dataset) > 0, 'your validation datasets is empty'
 
             self.val_every = val_every
             self.val_num_batches = val_num_batches
@@ -428,6 +565,7 @@ class MeshTransformerTrainer(Module):
         self.checkpoint_every = checkpoint_every
         self.checkpoint_folder = Path(checkpoint_folder)
         self.checkpoint_folder.mkdir(exist_ok = True, parents = True)
+        self.log_every_n_iters = log_every_n_iters
 
     def log(self, **data_kwargs):
         self.accelerator.log(data_kwargs, step = self.step.item())
@@ -511,7 +649,9 @@ class MeshTransformerTrainer(Module):
 
                     self.accelerator.backward(loss / self.grad_accum_every)
 
-            self.print(f'loss: {loss.item():.3f}')
+            # Done so that we do not fill the console with too many logs
+            if step % self.log_every_n_iters == (self.log_every_n_iters - 1):
+                self.print(f'loss: {loss.item():.3f}')
 
             self.log(loss = loss.item())
 

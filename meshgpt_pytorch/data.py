@@ -258,7 +258,7 @@ def cache_face_edges_for_dataset(
 
     return inner
 
-# dataset
+# datasets
 
 class DatasetFromTransforms(Dataset):
     @typecheck
