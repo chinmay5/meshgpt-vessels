@@ -6,6 +6,7 @@ import torch
 from tqdm import tqdm
 
 from environment_setup import PROJECT_ROOT_DIR
+from mesh_on_vessels.datasets.kidney_dataset import create_train_dataset, create_val_dataset
 from mesh_on_vessels.datasets.vessel_dataset import create_dataset, create_check_dataset
 from meshgpt_pytorch import MeshAutoencoder, MeshAutoencoderTrainer
 import torch.nn.functional as F
@@ -40,8 +41,11 @@ def increase_dataset_size(dataset):
     print(len(dataset.data))
 
 
-def train(from_scratch):
-    dataset = create_dataset()
+def train(from_scratch, is_kidney):
+    if is_kidney:
+        dataset = create_train_dataset(num_augmentations=50)
+    else:
+        dataset = create_dataset()
     # NOTE: During creating the dataset itself, we have increased the input by a factor of 50
     # Uncomment this line only if there is a very good reason
     # increase_dataset_size(dataset)
@@ -115,7 +119,7 @@ def phase_training(num_train_steps:int, batch_size:int, checkpoint:str, dataset,
 
 
 @torch.inference_mode
-def check_trained_model():
+def check_trained_model(is_kidney):
     # Load the model
     # We do not pass the checkpoint since model params are made trainable by default in that case
     autoenc_model = create_autoencoder_model(None)
@@ -124,8 +128,10 @@ def check_trained_model():
     pkg = torch.load(checkpoint)
     autoenc_model.load_state_dict(pkg['model'])
     autoenc_model.eval()
-
-    dataset = create_check_dataset()
+    if is_kidney:
+        dataset = create_val_dataset()
+    else:
+        dataset = create_check_dataset()
     min_mse, max_mse = float('inf'), float('-inf')
     random_samples, random_samples_pred, all_random_samples = [], [], []
     total_mse, sample_size = 0.0, 20
@@ -221,6 +227,6 @@ def encode_latents():
 
 
 if __name__ == '__main__':
-    # train(from_scratch=True)
-    check_trained_model()
+    train(from_scratch=True, is_kidney=True)
+    check_trained_model(is_kidney=True)
     # encode_latents()

@@ -74,34 +74,36 @@ def augment_mesh(vertices, scale_factor):
     return vertices
 
 
-def load_filename(directory, variations):
+def load_filename(dataset_file_names, variations):
     obj_datas = []
     possible_values = np.arange(0.75, 1.0, 0.005)
     scale_factors = np.random.choice(possible_values, size=variations)
+    with open(dataset_file_names, 'r') as file:
+        file_list = file.read().splitlines()
+    # Filter spurious relations away
+    file_list = [x for x in file_list if x.endswith('.obj')]
+    for file_path in file_list:
+        vertices, faces = get_mesh(file_path)
+        filename = os.path.basename(file_path)
+        faces = torch.tensor(faces.tolist(), dtype=torch.long).to("cuda")
+        face_edges = derive_face_edges_from_faces(faces)
+        texts, ext = os.path.splitext(filename)
 
-    for filename in tqdm(os.listdir(directory)):
-        if filename.endswith((".obj", ".stl")):
-            file_path = os.path.join(directory, filename)
-            vertices, faces = get_mesh(file_path)
-
-            faces = torch.tensor(faces.tolist(), dtype=torch.long).to("cuda")
-            face_edges = derive_face_edges_from_faces(faces)
-            texts, ext = os.path.splitext(filename)
-
-            for scale_factor in scale_factors:
-                aug_vertices = augment_mesh(vertices.copy(), scale_factor)
-                obj_data = {"vertices": torch.tensor(aug_vertices.tolist(), dtype=torch.float).to("cuda"),
-                            "faces": faces, "face_edges": face_edges, "texts": texts}
-                obj_datas.append(obj_data)
+        for scale_factor in scale_factors:
+            aug_vertices = augment_mesh(vertices.copy(), scale_factor)
+            obj_data = {"vertices": torch.tensor(aug_vertices.tolist(), dtype=torch.float).to("cuda"),
+                        "faces": faces, "face_edges": face_edges, "texts": texts}
+            obj_datas.append(obj_data)
 
     print(f"[create_mesh_dataset] Returning {len(obj_data)} meshes")
     return obj_datas
 
 
-def create_dataset(data_dir, num_augmentations=5):
+def create_train_dataset(num_augmentations=5):
     dataset_path = f"{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/kidney_dataset.npz"
+    train_file_names = f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/train.txt'
     if not os.path.isfile(dataset_path):
-        data = load_filename(data_dir, num_augmentations)
+        data = load_filename(train_file_names, num_augmentations)
         dataset = MeshDataset(data)
         dataset.generate_face_edges()
         dataset.save(dataset_path)
@@ -109,10 +111,11 @@ def create_dataset(data_dir, num_augmentations=5):
     return dataset
 
 
-def create_check_dataset(data_dir):
+def create_val_dataset():
     dataset_path = f"{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/check_kidney_dataset.npz"
+    val_file_names = f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/val.txt'
     if not os.path.isfile(dataset_path):
-        data = load_filename(data_dir, 1)
+        data = load_filename(val_file_names, 1)
         dataset = MeshDataset(data)
         dataset.generate_face_edges()
         dataset.save(dataset_path)
@@ -199,6 +202,7 @@ def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):
 
 
 if __name__ == '__main__':
-    down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800)
-    split_train_test('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
+    # down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800)
+    # split_train_test('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
+    create_train_dataset(num_augmentations=5)
 
