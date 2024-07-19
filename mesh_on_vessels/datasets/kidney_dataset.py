@@ -1,5 +1,6 @@
 import glob
 import os
+import random
 from collections import OrderedDict
 
 import numpy as np
@@ -170,10 +171,34 @@ def down_sample_all_meshes(data_dir, max_faces):
         o3d.io.write_triangle_mesh(f'{target_dir}/{os.path.basename(filename)}', decimated_mesh)
 
 
+def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):
+    # Get the list of all files with the specified extension in the folder
+    all_files = [os.path.join(base_folder, f) for f in os.listdir(base_folder) if f.endswith(file_extension)]
+
+    # Shuffle the list to ensure random division
+    random.shuffle(all_files)
+
+    # Determine the split index
+    split_index = int(len(all_files) * train_ratio)
+
+    # Split the files into training and testing sets
+    train_files = all_files[:split_index]
+    val_files = all_files[split_index:]
+
+    # Write the training file paths to train.txt
+    with open(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/train.txt', 'w') as train_file:
+        for file_path in train_files:
+            train_file.write(f"{file_path}\n")
+
+    # Write the testing file paths to test.txt
+    with open(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/val.txt', 'w') as val_file:
+        for file_path in val_files:
+            val_file.write(f"{file_path}\n")
+
+    print(f"Train and test files have been written to train.txt and test.txt respectively.")
+
+
 if __name__ == '__main__':
-    # subsample_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800, extension='.stl')
-    # check_discretization("/mnt/dog/chinmay/IntrA/annotated/obj/AN1_full.obj")
-    # compare_subsampled_mesh_stats(base_dir="/mnt/dog/chinmay/IntrA/annotated/obj",
-    #                               subsampled_dir="/mnt/dog/chinmay/IntrA/annotated/subsampled")
     down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800)
+    split_train_test('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
 
