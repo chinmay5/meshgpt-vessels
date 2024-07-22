@@ -123,7 +123,7 @@ def check_trained_model(is_kidney):
     # Load the model
     # We do not pass the checkpoint since model params are made trainable by default in that case
     autoenc_model = create_autoencoder_model(None)
-    checkpoint = get_latest_checkpoint(directory_path=f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/checkpoints')
+    checkpoint = get_latest_checkpoint(directory_path=f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/checkpoints_lower')
     print(f"Loading {checkpoint}")
     pkg = torch.load(checkpoint)
     autoenc_model.load_state_dict(pkg['model'])
