@@ -222,10 +222,13 @@ def down_sample_all_meshes(data_dir, max_faces, buffer=None):
     for filename in tqdm(glob.glob(f"{data_dir}/*.stl")):
         decimated_mesh = _downsample_single_mesh(filename=filename, max_faces=max_faces, buffer=buffer)
         decimated_mesh = ensure_water_tight(decimated_mesh, filename, buffer=buffer)
-        # Save this mesh
-        # We save only as obj
-        filename = filename.replace('stl', "obj")
-        o3d.io.write_triangle_mesh(f'{target_dir}/{os.path.basename(filename)}', decimated_mesh)
+        # Let us save the mesh only when we can ensure it is water-tight
+        if decimated_mesh.is_watertight():
+            # We save only as obj
+            filename = filename.replace('stl', "obj")
+            o3d.io.write_triangle_mesh(f'{target_dir}/{os.path.basename(filename)}', decimated_mesh)
+        else:
+            print(f"{os.path.basename(filename)} is not water-tight. Skipping")
 
 
 def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):

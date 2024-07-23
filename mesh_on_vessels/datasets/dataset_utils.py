@@ -23,7 +23,7 @@ def decimate_mesh(filename: str, max_faces: int, visualize: bool = True, mesh=No
         simplified_mesh.compute_vertex_normals()
         o3d.visualization.draw_geometries([original_mesh])
         o3d.visualization.draw_geometries([simplified_mesh])
-    print(f"{np.asarray(original_mesh.triangles).shape=} \n {np.asarray(simplified_mesh.triangles).shape=}")
+    # print(f"{np.asarray(original_mesh.triangles).shape=} \n {np.asarray(simplified_mesh.triangles).shape=}")
     return simplified_mesh
 
 

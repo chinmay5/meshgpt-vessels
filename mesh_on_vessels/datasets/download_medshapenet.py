@@ -58,3 +58,20 @@ if __name__ == '__main__':
     args = parser.parse_args()
     search_and_download_organ(args.dest_dir, args.organ)
     # e.g. --dest_dir=/net/cephfs/shares/menze.dqbm.uzh/chinmay/dataset/mesh_dataset/med_shapenet --organ=kidney
+    # There are some invalid samples that need to be removed
+    # kidney_00102.stl
+    # kidney_00180.stl
+    # kidney_00677.stl
+    # kidney_00896.stl
+    # kidney_10065.stl
+    # kidney_00948.stl
+    # kidney_00556.stl
+    # kidney_00338.stl
+    # kidney_00894.stl
+    # kidney_00222.stl
+    # kidney_01057.stl
+    # kidney_00433.stl
+    # kidney_01083.stl
+    # kidney_00444.stl
+    # kidney_00916.stl
+    # kidney_00784.stl
