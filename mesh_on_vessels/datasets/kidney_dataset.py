@@ -1,4 +1,5 @@
 import glob
+import io
 import os
 import random
 from collections import OrderedDict
@@ -6,11 +7,11 @@ from collections import OrderedDict
 import numpy as np
 import open3d as o3d
 import torch
+from pymeshfix import MeshFix
 from tqdm import tqdm
 
 from environment_setup import PROJECT_ROOT_DIR
-from mesh_on_vessels.datasets.dataset_utils import check_discretization, compare_subsampled_mesh_stats, \
-    subsample_meshes, decimate_mesh
+from mesh_on_vessels.datasets.dataset_utils import decimate_mesh
 from meshgpt_pytorch.data import derive_face_edges_from_faces
 from meshgpt_pytorch.mesh_dataset import MeshDataset
 
@@ -122,52 +123,105 @@ def create_val_dataset():
     dataset = MeshDataset.load(dataset_path)
     return dataset
 
-def _downsample_single_mesh(filename, max_faces=800, save_mesh=False):
+
+def ensure_water_tight(mesh, filename, buffer=None) -> o3d.geometry.TriangleMesh:
+    """
+    Converts the given mesh into a water-tight one.
+    :param mesh: Original mesh
+    :param filename: Filename of the original mesh. Done for logging purpose
+    :return: Water tight mesh or the closest approximation
+    """
+    if not mesh.is_watertight():
+        write_buffer(buffer, f"Original sample {filename} is not water tight\n")
+        mesh = fix_mesh(mesh)
+        if not mesh.is_watertight():
+            write_buffer(buffer, f"ERROR: {filename} is not fixed. Please remove\n")
+    return mesh
+
+
+def _downsample_single_mesh(filename, max_faces=800, save_mesh=False, buffer=None):
     """
     The function downsamples a mesh to generate a relatively smaller size. It happens in two steps
     1. Vertex cluserting with twice the voxel size
     2. Decimation on the coarser mesh
     :param filename: Filename to downsample
+    :param: The string buffer object
     :return: Downsampled mesh file
     """
     mesh_in = o3d.io.read_triangle_mesh(filename)
-    # assert mesh_in.is_watertight(), "Original mesh is not water tight"
-    mesh_in.compute_vertex_normals()
     if len(mesh_in.triangles) <= max_faces:
         return mesh_in
-    # print(
-    #     f'Input mesh has {len(mesh_in.vertices)} vertices and {len(mesh_in.triangles)} triangles'
-    # )
     voxel_size = max(mesh_in.get_max_bound() - mesh_in.get_min_bound()) / 32
-    # print(f'voxel_size = {voxel_size:e}')
     mesh_smp = mesh_in.simplify_vertex_clustering(
         voxel_size=voxel_size,
         contraction=o3d.geometry.SimplificationContraction.Average)
-    # print(
-    #     f'Simplified mesh has {len(mesh_smp.vertices)} vertices and {len(mesh_smp.triangles)} triangles'
-    # )
+
     # assert mesh_smp.is_watertight(), "Mesh is not water tight. Too large voxel size"
     base_path = os.path.split(filename)[0]
     filename = os.path.basename(filename).replace(".stl", "_check.obj")
-    new_filename = f"{base_path}/{filename}"
-    o3d.io.write_triangle_mesh(new_filename, mesh_smp)
     if len(mesh_smp.triangles) <= max_faces:
         return mesh_smp
     # Now we try to decimate the mesh
-    decimated_mesh = decimate_mesh(new_filename, max_faces=max_faces, visualize=False)
+    decimated_mesh = decimate_mesh(filename='', max_faces=max_faces, visualize=False, mesh=mesh_smp)
     if save_mesh:
         final_filename = f"{base_path}/{filename.replace('_check', '_decimated')}"
         o3d.io.write_triangle_mesh(final_filename, decimated_mesh)
     return decimated_mesh
-    # assert decimated_mesh.is_watertight(), "Mesh is not water tight. Too large decimation"
 
 
+def _convert_pyvista_to_open3d(pyvista_mesh):
+    """
+    Converts the pyvista mesh into open3d. Needed for pymeshfix
+    :param pyvista_mesh: The pyvista mesh
+    :return: open3d mesh
+    """
 
-def down_sample_all_meshes(data_dir, max_faces):
+    vertices = pyvista_mesh.points
+    faces = pyvista_mesh.faces.reshape((-1, 4))[:, 1:]  # Remove the first column which is the number of points per face
+
+    # Create an Open3D mesh
+    o3d_mesh = o3d.geometry.TriangleMesh()
+
+    # Assign vertices and faces to the Open3D mesh
+    o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+    o3d_mesh.triangles = o3d.utility.Vector3iVector(faces)
+    return o3d_mesh
+
+
+def fix_mesh(decimated_mesh):
+    """
+    The function takes an open3d mesh and fills in the holes.
+    It uses the pyMeshFix library
+    :param decimated_mesh: open3d mesh file
+    :return: o3d.geometry.TriangleMesh
+    """
+    vertices = np.asarray(decimated_mesh.vertices)
+    faces = np.asarray(decimated_mesh.triangles)
+    meshfix = MeshFix(vertices, faces)
+    meshfix.repair()
+    mesh = meshfix.mesh
+    open3d_mesh = _convert_pyvista_to_open3d(mesh)
+    return open3d_mesh
+
+
+def write_buffer(buffer, message):
+    if buffer is None:
+        return
+    buffer.write(message)
+
+
+def down_sample_all_meshes(data_dir, max_faces, buffer=None):
+    """
+    Reads the meshes in the directory and downsamples them using
+    :param data_dir:
+    :param max_faces:
+    :return:
+    """
     target_dir = f"{os.path.split(data_dir)[0]}/subsampled_meshes"
     os.makedirs(target_dir, exist_ok=True)
     for filename in tqdm(glob.glob(f"{data_dir}/*.stl")):
-        decimated_mesh = _downsample_single_mesh(filename=filename, max_faces=max_faces)
+        decimated_mesh = _downsample_single_mesh(filename=filename, max_faces=max_faces, buffer=buffer)
+        decimated_mesh = ensure_water_tight(decimated_mesh, filename, buffer=buffer)
         # Save this mesh
         # We save only as obj
         filename = filename.replace('stl', "obj")
@@ -202,7 +256,12 @@ def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):
 
 
 if __name__ == '__main__':
-    # down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800)
+    buffer = io.StringIO()
+    down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800,
+                           buffer=buffer)
     # split_train_test('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
-    create_train_dataset(num_augmentations=5)
-
+    # create_train_dataset(num_augmentations=5)
+    final_content = buffer.getvalue()
+    buffer.close()
+    with open(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/mesh_extraction_log.txt', "w") as file:
+        file.write(final_content)

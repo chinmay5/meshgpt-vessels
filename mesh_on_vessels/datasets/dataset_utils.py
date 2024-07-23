@@ -5,12 +5,16 @@ import numpy as np
 import torch
 from tqdm import tqdm
 import open3d as o3d
+from pymeshfix import MeshFix
 
 from environment_setup import PROJECT_ROOT_DIR
 
 
-def decimate_mesh(filename: str, max_faces: int, visualize: bool = True) -> o3d.geometry.TriangleMesh:
-    original_mesh = o3d.io.read_triangle_mesh(filename)
+def decimate_mesh(filename: str, max_faces: int, visualize: bool = True, mesh=None) -> o3d.geometry.TriangleMesh:
+    if mesh is None:
+        original_mesh = o3d.io.read_triangle_mesh(filename)
+    else:
+        original_mesh = mesh
     simplified_mesh = original_mesh.simplify_quadric_decimation(
         target_number_of_triangles=max_faces)  # triangles are the faces
     if visualize:
@@ -85,4 +89,48 @@ def compare_subsampled_mesh_stats(base_dir:str, subsampled_dir:str, extension: s
         original_mesh = o3d.io.read_triangle_mesh(filename)
         subsampled_mesh = o3d.io.read_triangle_mesh(f"{subsampled_dir}/{os.path.basename(filename)}")
         print(f"Original mesh has vertices = {np.asarray(original_mesh.vertices).shape[0]}, faces = {np.asarray(original_mesh.triangles).shape[0]}; Subsampled has vertices = {np.asarray(subsampled_mesh.vertices).shape[0]}, faces = {np.asarray(subsampled_mesh.triangles).shape[0]}")
+
+
+def convert_pyvista_to_open3d(pyvista_mesh):
+    """
+    Utility function that converts the pyvista mesh into the open3d equivalent
+    :param pyvista_mesh: pyvista mesh object
+    :return: open3d mesh
+    """
+    # Extract vertices and faces from the PyVista mesh
+    vertices = pyvista_mesh.points
+    faces = pyvista_mesh.faces.reshape((-1, 4))[:, 1:]  # Remove the first column which is the number of points per face
+
+    # Create an Open3D mesh
+    o3d_mesh = o3d.geometry.TriangleMesh()
+
+    # Assign vertices and faces to the Open3D mesh
+    o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+    o3d_mesh.triangles = o3d.utility.Vector3iVector(faces)
+    return o3d_mesh
+
+def convert_to_watertight_mesh(mesh_file:str):
+    """
+    Takes a mesh and converts it into a water-tight one.
+    :param mesh_file: Mesh filename
+    :return: None
+    """
+    orig_mesh = o3d.io.read_triangle_mesh(mesh_file)
+    # orig_mesh.plot_boundaries()
+    print(f"{orig_mesh.is_watertight()=}")
+
+    vertices = np.asarray(orig_mesh.vertices)
+    faces = np.asarray(orig_mesh.triangles)
+    meshfix = MeshFix(vertices, faces)
+    # holes = meshfix.extract_holes()
+    meshfix.repair()
+    # meshfix.plot()
+    mesh = meshfix.mesh
+    open3d_mesh = convert_pyvista_to_open3d(mesh)
+    print(open3d_mesh.is_watertight())
+
+
+if __name__ == '__main__':
+    mesh_file = '/mnt/dog/chinmay/temp_outputs/mesh_checks/kidney_00010.stl'
+    convert_to_watertight_mesh(mesh_file)
 

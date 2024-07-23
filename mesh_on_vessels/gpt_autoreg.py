@@ -79,7 +79,7 @@ def train_gpt_model(autoenc_checkpoint, is_train, resume_gpt_training):
         gpt_transformer.to(device)
     text_coords = []
     for _ in range(5):
-        text_coords.append(gpt_transformer.generate(texts=None, temperature=0.5))
+        text_coords.append(gpt_transformer.generate(texts=None, temperature=0))
 
     from meshgpt_pytorch import mesh_render
     mesh_render.save_rendering(f'{save_dir}/3d_models_all.obj', text_coords)
