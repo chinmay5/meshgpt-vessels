@@ -231,7 +231,7 @@ def down_sample_all_meshes(data_dir, max_faces, buffer=None):
             print(f"{os.path.basename(filename)} is not water-tight. Skipping")
 
 
-def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):
+def split_train_val(base_folder, file_extension='.obj', train_ratio=0.8):
     # Get the list of all files with the specified extension in the folder
     all_files = [os.path.join(base_folder, f) for f in os.listdir(base_folder) if f.endswith(file_extension)]
 
@@ -255,15 +255,15 @@ def split_train_test(base_folder, file_extension='.obj', train_ratio=0.8):
         for file_path in val_files:
             val_file.write(f"{file_path}\n")
 
-    print(f"Train and test files have been written to train.txt and test.txt respectively.")
+    print(f"Train and val files have been written to train.txt and val.txt respectively.")
 
 
 if __name__ == '__main__':
     buffer = io.StringIO()
     down_sample_all_meshes(data_dir='/mnt/dog/chinmay/temp_outputs/mesh_checks', max_faces=800,
                            buffer=buffer)
-    # split_train_test('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
-    # create_train_dataset(num_augmentations=5)
+    split_train_val('/mnt/dog/chinmay/temp_outputs/subsampled_meshes')
+    create_train_dataset(num_augmentations=5)
     final_content = buffer.getvalue()
     buffer.close()
     with open(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/datasets/mesh_extraction_log.txt', "w") as file:

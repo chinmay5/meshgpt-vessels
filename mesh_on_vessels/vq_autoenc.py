@@ -23,7 +23,8 @@ def create_autoencoder_model(checkpoint=None):
         dim_normal_embed=16,
         dim_angle_embed=8,
         attn_decoder_depth=4,
-        attn_encoder_depth=2
+        attn_encoder_depth=2,
+        num_quantizers=2
     ).to("cuda")
     total_params = sum(p.numel() for p in autoencoder.parameters())
     total_params = f"{total_params / 1000000:.1f}M"
@@ -49,7 +50,7 @@ def train(from_scratch, is_kidney):
     # NOTE: During creating the dataset itself, we have increased the input by a factor of 50
     # Uncomment this line only if there is a very good reason
     # increase_dataset_size(dataset)
-    batch_size = 16  # The batch size should be max 64.
+    batch_size = 32  # The batch size should be max 64.
     grad_accum_every = 4
     # So set the maximal batch size (max 64) that your VRAM can handle and then use grad_accum_every to create a effective batch size of 64, e.g  16 * 4 = 64
     learning_rate = 1e-3  # Start with 1e-3 then at stagnation around 0.35, you can lower it to 1e-4.
@@ -58,14 +59,14 @@ def train(from_scratch, is_kidney):
         # First phase of training
         # We perform first phase of the training that uses a lr = 1e-3 and gives loss of 0.5 after 20-50 epochs.
         # https://github.com/lucidrains/meshgpt-pytorch/issues/93#issuecomment-2223353905
-        phase_training(num_train_steps=20000, batch_size=batch_size, checkpoint=None,
+        phase_training(num_train_steps=80000, batch_size=batch_size, checkpoint=None,
                        dataset=dataset, grad_accum_every=grad_accum_every, learning_rate=learning_rate, save_dir_suffix="")
     # Now the second phase.
     # We need to give the model checkpoint as well.
     learning_rate_new = 1e-4
     checkpoint = get_latest_checkpoint(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/checkpoints/')
     print(f"Loading checkpoint {checkpoint}")
-    phase_training(num_train_steps=10000, batch_size=batch_size, checkpoint=checkpoint, dataset=dataset,
+    phase_training(num_train_steps=20000, batch_size=batch_size, checkpoint=checkpoint, dataset=dataset,
                    grad_accum_every=grad_accum_every, learning_rate=learning_rate_new, save_dir_suffix="_lower")
 
 
@@ -106,12 +107,12 @@ def phase_training(num_train_steps:int, batch_size:int, checkpoint:str, dataset,
     """
     autoencoder = create_autoencoder_model(checkpoint)
     autoencoder.commit_loss_weight = 0.1  # Set dependant on the datasets size, on smaller datasets, 0.1 is fine, otherwise try from 0.25 to 0.4.
-    autoencoder_trainer = MeshAutoencoderTrainer(model=autoencoder, warmup_steps=10, dataset=dataset,
+    autoencoder_trainer = MeshAutoencoderTrainer(model=autoencoder, dataset=dataset,
                                                  num_train_steps=num_train_steps,
                                                  batch_size=batch_size,
                                                  grad_accum_every=grad_accum_every,
                                                  learning_rate=learning_rate,
-                                                 checkpoint_every_epoch=100,
+                                                 checkpoint_every_epoch=500,
                                                  use_wandb_tracking=False,
                                                  checkpoint_folder=f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/checkpoints{save_dir_suffix}',
                                                  check_sample_every_n_steps=200)
