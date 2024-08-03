@@ -44,7 +44,7 @@ def increase_dataset_size(dataset):
 
 def train(from_scratch, is_kidney):
     if is_kidney:
-        dataset = create_train_dataset(num_augmentations=50)
+        dataset = create_train_dataset(num_augmentations=10)
     else:
         dataset = create_dataset()
     # NOTE: During creating the dataset itself, we have increased the input by a factor of 50
@@ -59,14 +59,14 @@ def train(from_scratch, is_kidney):
         # First phase of training
         # We perform first phase of the training that uses a lr = 1e-3 and gives loss of 0.5 after 20-50 epochs.
         # https://github.com/lucidrains/meshgpt-pytorch/issues/93#issuecomment-2223353905
-        phase_training(num_train_steps=80000, batch_size=batch_size, checkpoint=None,
+        phase_training(num_train_steps=40000, batch_size=batch_size, checkpoint=None,
                        dataset=dataset, grad_accum_every=grad_accum_every, learning_rate=learning_rate, save_dir_suffix="")
     # Now the second phase.
     # We need to give the model checkpoint as well.
     learning_rate_new = 1e-4
     checkpoint = get_latest_checkpoint(f'{PROJECT_ROOT_DIR}/mesh_on_vessels/outputs/checkpoints/')
     print(f"Loading checkpoint {checkpoint}")
-    phase_training(num_train_steps=20000, batch_size=batch_size, checkpoint=checkpoint, dataset=dataset,
+    phase_training(num_train_steps=10000, batch_size=batch_size, checkpoint=checkpoint, dataset=dataset,
                    grad_accum_every=grad_accum_every, learning_rate=learning_rate_new, save_dir_suffix="_lower")
 
 
@@ -106,7 +106,7 @@ def phase_training(num_train_steps:int, batch_size:int, checkpoint:str, dataset,
     :return: None
     """
     autoencoder = create_autoencoder_model(checkpoint)
-    autoencoder.commit_loss_weight = 0.1  # Set dependant on the datasets size, on smaller datasets, 0.1 is fine, otherwise try from 0.25 to 0.4.
+    autoencoder.commit_loss_weight = 0.25  # Set dependant on the datasets size, on smaller datasets, 0.1 is fine, otherwise try from 0.25 to 0.4.
     autoencoder_trainer = MeshAutoencoderTrainer(model=autoencoder, dataset=dataset,
                                                  num_train_steps=num_train_steps,
                                                  batch_size=batch_size,
